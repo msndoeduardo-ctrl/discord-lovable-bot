@@ -73,8 +73,19 @@ async def discord_webhook(req: Request):
     return {"status": "ok"}
 
 # ======================
-# OAUTH DISCORD (NOVA ROTA)
+# OAUTH DISCORD
 # ======================
+@app.get("/auth/discord")
+async def discord_login():
+    auth_url = (
+        "https://discord.com/api/oauth2/authorize"
+        f"?client_id={DISCORD_CLIENT_ID}"
+        "&response_type=code"
+        "&scope=identify%20email"
+        f"&redirect_uri={DISCORD_REDIRECT_URI}"
+    )
+    return {"auth_url": auth_url}
+
 @app.get("/auth/discord/callback")
 async def discord_callback(code: str, state: str = None):
     token_url = "https://discord.com/api/oauth2/token"
