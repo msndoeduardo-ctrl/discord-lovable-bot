@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 import asyncio
 import threading
+import requests
 from fastapi import FastAPI, Request
 import uvicorn
 
@@ -13,8 +14,12 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 GUILD_ID_ENV = os.getenv("DISCORD_GUILD_ID")
 if not GUILD_ID_ENV:
-    raise Exception("DISCORD_GUILD_ID não configurado no Railway")
+    raise Exception("DISCORD_GUILD_ID não configurado")
 GUILD_ID = int(GUILD_ID_ENV)
+
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
+DISCORD_REDIRECT_URI = "https://discord-lovable-bot.onrender.com/auth/discord/callback"
 
 CATEGORY_ID = 1468013305204445250
 CHANNEL_BUTTON_ID = 1468013455712714873
@@ -64,16 +69,46 @@ async def discord_webhook(req: Request):
     if not role_id:
         return {"error": "Plano inválido"}
 
-    # executa no loop do Discord (anti-crash)
     bot.loop.create_task(apply_role(discord_id, role_id, action))
-
-    return {"status": "ok", "action": action}
-
-def run_api():
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 3000)))
+    return {"status": "ok"}
 
 # ======================
-# FUNÇÃO CONTADOR
+# OAUTH DISCORD (NOVA ROTA)
+# ======================
+@app.get("/auth/discord/callback")
+async def discord_callback(code: str, state: str = None):
+    token_url = "https://discord.com/api/oauth2/token"
+
+    data = {
+        "client_id": DISCORD_CLIENT_ID,
+        "client_secret": DISCORD_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": DISCORD_REDIRECT_URI,
+        "scope": "identify email",
+    }
+
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    token_res = requests.post(token_url, data=data, headers=headers)
+    token_res.raise_for_status()
+    token_json = token_res.json()
+
+    user_res = requests.get(
+        "https://discord.com/api/users/@me",
+        headers={"Authorization": f"Bearer {token_json['access_token']}"}
+    )
+    user_res.raise_for_status()
+
+    return {
+        "discord_user": user_res.json()
+    }
+
+def run_api():
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+
+# ======================
+# CONTADOR
 # ======================
 def get_next_ticket_number():
     if not os.path.exists(TICKET_COUNTER_FILE):
@@ -98,17 +133,13 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ======================
-# VIEW ABRIR TICKET (PERSISTENTE)
+# TICKETS
 # ======================
 class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="🎫 Abrir Ticket",
-        style=discord.ButtonStyle.green,
-        custom_id="ticket_open"
-    )
+    @discord.ui.button(label="🎫 Abrir Ticket", style=discord.ButtonStyle.green, custom_id="ticket_open")
     async def open_ticket(self, interaction: discord.Interaction, _):
         guild = interaction.guild
         category = guild.get_channel(CATEGORY_ID)
@@ -127,9 +158,7 @@ class TicketView(discord.ui.View):
         )
 
         await channel.send(
-            f"🎟️ **Ticket #{number}**\n"
-            f"👤 {interaction.user.mention}\n"
-            f"🛠️ {support.mention}",
+            f"🎟️ **Ticket #{number}**\n👤 {interaction.user.mention}\n🛠️ {support.mention}",
             view=CloseTicketView()
         )
 
@@ -137,49 +166,35 @@ class TicketView(discord.ui.View):
             f"✅ Ticket criado: {channel.mention}", ephemeral=True
         )
 
-# ======================
-# VIEW FECHAR TICKET (PERSISTENTE)
-# ======================
 class CloseTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="🔒 Fechar Ticket",
-        style=discord.ButtonStyle.red,
-        custom_id="ticket_close"
-    )
+    @discord.ui.button(label="🔒 Fechar Ticket", style=discord.ButtonStyle.red, custom_id="ticket_close")
     async def close_ticket(self, interaction: discord.Interaction, _):
         channel = interaction.channel
         ticket_number = channel.name.replace("ticket-", "")
 
         lines = []
         async for m in channel.history(limit=None, oldest_first=True):
-            if not m.content:
-                continue
-            time = m.created_at.strftime("%H:%M")
-            lines.append(
-                f"👤 {m.author.display_name} — {time}\n{m.content}\n"
-            )
+            if m.content:
+                time = m.created_at.strftime("%H:%M")
+                lines.append(f"{m.author.display_name} — {time}\n{m.content}\n")
 
         transcript = "\n".join(lines)
 
         try:
             await interaction.user.send(
-                f"📄 **Transcrição Ticket #{ticket_number}**\n\n```{transcript[:1900]}```"
+                f"📄 **Transcrição Ticket #{ticket_number}**\n```{transcript[:1900]}```"
             )
         except:
             pass
 
         await channel.delete()
 
-# ======================
-# BOT READY
-# ======================
 @bot.event
 async def on_ready():
     print(f"🤖 Bot online como {bot.user}")
-
     bot.add_view(TicketView())
     bot.add_view(CloseTicketView())
 
