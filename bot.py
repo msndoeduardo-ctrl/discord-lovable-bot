@@ -5,6 +5,8 @@ import asyncio
 import threading
 import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
 import uvicorn
 
 # ======================
@@ -110,10 +112,20 @@ async def discord_callback(code: str, state: str = None):
         headers={"Authorization": f"Bearer {token_json['access_token']}"}
     )
     user_res.raise_for_status()
+    user = user_res.json()
 
-    return {
-        "discord_user": user_res.json()
-    }
+    # ======================
+    # REDIRECT PARA O LOVABLE
+    # ======================
+    query = urlencode({
+        "discord_id": user["id"],
+        "discord_username": user["username"],
+        "discord_email": user.get("email", "")
+    })
+
+    redirect_url = f"https://rmtacademy.lovable.app/discord-callback?{query}"
+
+    return RedirectResponse(url=redirect_url)
 
 def run_api():
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
